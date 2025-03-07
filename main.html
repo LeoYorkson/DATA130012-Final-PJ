@@ -1,0 +1,1269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, height=device-height, initial-scale=1.0">
+    <title>Visualization</title>
+    <style>
+        
+
+    </style>
+    <!-- <script src="https://requirejs.org/docs/release/2.3.6/minified/require.js"></script> -->
+    <script async src="https://cdn.bootcdn.net/ajax/libs/axios/0.21.1/axios.min.js"></script>
+    <script src="https://d3js.org/d3.v4.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/holtzy/D3-graph-gallery@master/LIB/d3-scale-radial.js"></script>
+</head>
+
+<body background="background.png">
+
+</body>
+
+<script>
+    
+    const margin = {top: 10, right: 30, bottom: 30, left: 10, sidewidth: 200, sidewidth_right: 400,
+                    leftside_svg: {top: 100, left: 20, right: 30, parallel_top: 80},
+                    circular: {innerRadius: 90, outerRadius: 180},
+                    financial_plot: {width: 350}};
+    const width = 1300 - margin.left - margin.right - margin.sidewidth_right;
+    const height = 600 - margin.top - margin.bottom;
+    let alldata = {'ActivityLogs': new Array(1011), 'ActivityLogsCache': new Array(20), 'Apartments': new Array(1734),
+                    'Participants': new Array(1011), 'Buildings': new Array(1043), 'Employers': new Array(1798),
+                    'colorsTrack': {},
+                    'circulars' : {'delay': -1}};
+    for (let i = 0; i < 1011; ++i) alldata.ActivityLogs[i] = [];
+    const colorsTrack = (x) => {    
+        if (typeof(alldata.colorsTrack[x]) === 'undefined'){
+            const n = Object.keys(alldata.colorsTrack).length % 10;
+            alldata.colorsTrack[x] = d3.schemeCategory10[n];
+        }
+        return alldata.colorsTrack[x];
+    }
+
+    let visualsetting = {'timeInterval': ['2022-03-01T00:00:00Z', '2022-07-04T09:55:00Z']}
+
+    // transform the mathematical coordinates to the image coordinate
+    const fcoor = (x, y) => [Math.round((2 + x / 5000.) * 300), Math.round((.18 + y / 5000.) * 300)];
+    
+    // convert a string to multiple coordinates 
+    // e.g. '((123 456, 253 748))' -> [[(123, 456), (253, 748)]]
+    function str2coor(s){
+        // some buildings has more than 1 polygon
+        let polygons = [];
+        const polygonstrs = s.slice(1, s.length - 2).split(')');
+        for (let j = 0; j < polygonstrs.length; ++j){
+            // for each polygon
+            let s0 = ' ';
+            if (j == 0) s0 = polygonstrs[0].slice(1);
+            else s0 = polygonstrs[j].slice(3);
+
+            let coors = [];
+            const splits = s0.split(', ');
+            for (let i = 0; i < splits.length; ++i){
+                const tmp = splits[i].split(' ');
+                const x = tmp[0], y = tmp[1];
+                coors.push([parseFloat(x), parseFloat(y)]);
+            }
+            polygons.push(coors);
+        }
+        return polygons
+    }
+
+
+    let svg = d3.select("body").append("svg")
+    .attr("width", width + margin.left + margin.right + margin.sidewidth_right)
+    .attr("height", height + margin.top + margin.bottom);
+
+    let map = svg.append("g").attr("class", "map").attr("width", width)
+    // .attr("x", margin.sidewidth).attr("y", margin.top)
+	.attr("transform", "translate(" + (0) + "," + margin.top + ")");
+    
+    function drawMap(){
+        d3.csv('Datasets\\Attributes\\Buildings.csv', (data) => {
+            // console.log(data[0]['location'].slice(10).split(',')[0].split(' '));
+            let polygons = [];
+            let colors = d3.scaleThreshold()
+                .domain(['Commercial,','Residental,','School'])
+                .range(["#DEB887", "#BDB76B", "	#00BFFF"])
+            for (let i = data.length - 1; i >= 0; --i){
+                const new_polygons = str2coor(data[i]['location'].slice(8));
+
+                // some of the buildings has more than 1 polygon, push each to the list
+                for (let j = 0, n = new_polygons.length; j < n; ++j){
+                    new_polygons[j].push(data[i]['buildingId']);
+                    new_polygons[j].push(data[i]['buildingType'])
+                    polygons.push(new_polygons[j]);
+                }
+            }
+            //console.log(polygons[1])
+            map.selectAll("buildings").data(polygons).enter().append("polygon")
+            .attr("class", "buildings")
+            .attr("points", (loc) => {
+                let points = []
+                for (let i = 0, n = loc.length-2; i < n; ++i){            
+                    // transform the real coordinate to the image coordinate
+                    points.push(fcoor(loc[i][0], loc[i][1]));
+                }
+                return points;
+            })
+            .style("fill",(loc)=>{
+                return colors(loc[loc.length-1]);
+            })
+        })
+
+        d3.csv('Datasets\\Attributes\\Apartments.csv', (data) => {
+            for (let i = 0, n = data.length; i < n; ++ i){
+                const loc = data[i]['location'].slice(7, data[i]['location'].length - 1).split(' ');
+                alldata.Apartments[data[i]['apartmentId']] = {
+                    'location': [parseFloat(loc[0]), parseFloat(loc[1])]
+                };
+                const building = data[i]['buildingId'];
+                const cost = parseFloat(data[i]['rentalCost']);
+                if (typeof(alldata.Buildings[building]) === 'undefined'){
+                    alldata.Buildings[building] = {cost: cost, apartmentNum: 1};
+                }else{
+                    const count = alldata.Buildings[building].apartmentNum;
+                    alldata.Buildings[building].cost = (alldata.Buildings[building].cost * count + cost) / (count + 1);
+                    alldata.Buildings[building].apartmentNum += 1;
+                }
+            }
+        })
+
+        d3.csv("Datasets\\Attributes\\Employers.csv", (data) => {
+            for (let i = 0, n = data.length; i < n; ++i){
+                alldata.Employers[data[i].employerId] = {
+                    'buildingId': data[i].buildingId
+                };
+            }
+
+            d3.csv("Datasets\\Attributes\\Jobs.csv", (data) => {
+                // link jobs to buildings and compute the average wage paid
+                for (let i = 0, n = data.length; i < n; ++i){
+                    const building = alldata.Employers[data[i]['employerId']].buildingId;
+                    const cost = parseFloat(data[i]['hourlyRate']);
+                    if (typeof(alldata.Buildings[building]) === 'undefined'){
+                        alldata.Buildings[building] = {cost: cost, jobsNum: 1};
+                    }else{
+                        const count = alldata.Buildings[building].jobsNum;
+                        alldata.Buildings[building].cost = (alldata.Buildings[building].cost * count + cost) / (count + 1);
+                        alldata.Buildings[building].jobsNum += 1;
+                    }
+                }
+            })
+        })
+    }
+    drawMap();
+
+    function drawPub(){
+        d3.csv('Datasets\\Attributes\\Pubs.csv', (data) => {
+            // console.log(data[0]['location'].slice(7,-1).split(',')[0].split(' '));
+            map.selectAll().data(data).enter().append("circle").attr("r",5)
+            .attr("cx", function(d){
+                const tmp = d['location'].slice(7,-1).split(',')[0].split(' ');
+                const x = parseFloat(tmp[0]), y = parseFloat(tmp[1]);
+                return fcoor(x, y)[0];
+            })
+            .attr("cy", function(d){
+                const tmp = d['location'].slice(7,-1).split(',')[0].split(' ');
+                const x = parseFloat(tmp[0]), y = parseFloat(tmp[1]);
+                return fcoor(x, y)[1];
+            })
+            .attr("class","Pub")
+            .style("fill","#00FFFF")//"#FF4500"
+            .style("opacity",0.6)
+            .append('title')
+            .text((d)=>{
+                return "pubId:"+d['pubId']+"\n"+
+                        "hourlyCost:"+Math.floor(d["hourlyCost"]*100)/100+"\n"+
+                        "maxOccupancy:"+d["maxOccupancy"]
+            })
+        })
+    }
+    drawPub();
+
+    function drawRestaurants(){
+        d3.csv("Datasets\\Attributes\\Restaurants.csv",(data)=>{
+            map.selectAll().data(data).enter().append("circle").attr("r",5)
+            .attr("cx", function(d){
+                const tmp = d['location'].slice(7,-1).split(',')[0].split(' ');
+                const x = parseFloat(tmp[0]), y = parseFloat(tmp[1]);
+                return fcoor(x, y)[0];
+            })
+            .attr("cy", function(d){
+                const tmp = d['location'].slice(7,-1).split(',')[0].split(' ');
+                const x = parseFloat(tmp[0]), y = parseFloat(tmp[1]);
+                return fcoor(x, y)[1];
+            })
+            .attr("class","Restaurant")
+            .style("fill","#FF4500")//"#00FFFF"
+            .style("opacity",0.8)
+            .append('title')
+            .text((d)=>{
+                return "restaurantId:"+d["restaurantId"]+"\n"
+                        +"foodCost:"+Math.floor(d["foodCost"]*100)/100+"\n"
+                        +"maxOccupancy:"+d["maxOccupancy "]
+            })
+        })
+    }
+    drawRestaurants();
+
+    function drawSchool(){
+        d3.csv('Datasets\\Attributes\\Schools.csv',(data) => {
+            map.selectAll().data(data).enter().append("circle").attr("r",5)
+            .attr("cx", function(d){
+                const tmp = d['location'].slice(7,-1).split(',')[0].split(' ');
+                const x = parseFloat(tmp[0]), y = parseFloat(tmp[1]);
+                return fcoor(x, y)[0];
+            })
+            .attr("cy", function(d){
+                const tmp = d['location'].slice(7,-1).split(',')[0].split(' ');
+                const x = parseFloat(tmp[0]), y = parseFloat(tmp[1]);
+                return fcoor(x, y)[1];
+            })
+            .attr("class","School")
+            .style("fill","#006400")
+            .style("opacity",0.8)
+            .append('title')
+            .text((d)=>{
+                Math.floor(d["monthlyCost"])
+                return "schoolId:"+d["schoolId"]+"\n"
+                        +"monthlyCost:"+Math.floor(d["monthlyCost"]*100)/100+"\n"
+                        +"maxEnrollment:"+d["maxEnrollment"]
+            })
+
+            for (let i = 0, n = data.length; i < n; ++i){
+                const building = data[i]['buildingId'];
+                alldata.Buildings[building] = {cost: parseFloat(data[i]['monthlyCost'])};
+            }
+        })
+    }
+    drawSchool();
+
+    //绘制区域图例用于表明各区域属性
+    function drawLegend(){
+        // commercial / residental / school
+        {
+            let legendColors = ["#DEB887", "#BDB76B", "#00BFFF"]
+            let legendText = ["Commercial","Residental","School"]
+
+            let legend = map.append("g")
+                .attr("id", "legend");
+
+            let legenditem = legend.selectAll(".legenditem")
+                .data(d3.range(3))
+                .enter()
+                .append("g")
+                .attr("class", "legenditem")
+                .on("mouseover", (d) => {
+                    if (d === 0){
+                        // highlight commercial area with hourlyRate
+                        d3.selectAll(".buildings")
+                            .transition()
+                            .style("opacity", (d) => {
+                                if (d[d.length - 1] === 'Commercial'){
+                                    const info = alldata.Buildings[d[d.length - 2]];
+                                    if (typeof(info) !== 'undefined'){
+                                        return (1 + Math.pow((info.cost - 10) / (37.15 - 10), 2)) * .5;
+                                    }
+                                    return .35
+                                }
+                                return .2;
+                            })
+                    }
+                    else if (d === 1){ // residental
+                        // highlight residental area with rental cost
+                        d3.selectAll(".buildings")
+                            .transition()
+                            .style("opacity", (d) => {
+                                if (d[d.length - 1] === 'Residental'){
+                                    const info = alldata.Buildings[d[d.length - 2]];
+                                    if (typeof(info) !== 'undefined'){
+                                        return (1 + Math.pow((info.cost - 348) / (1603 - 348), 2)) * .5;
+                                    }
+                                    return .35
+                                }
+                                return .2;
+                            })
+                    }else if (d === 2){ // school
+                        d3.selectAll(".buildings")
+                            .transition()
+                            .style("opacity", (d) => {
+                                if (d[d.length - 1] === 'School'){
+                                    const info = alldata.Buildings[d[d.length - 2]];
+                                    return (5.0 / 7 + Math.pow((info.cost - 12.8) / (91.2 - 12.8), 2)) * .7;
+                                }
+                                return .2;
+                            })
+                    }
+                })
+                .on("mouseleave", (d) => {
+                    d3.selectAll(".buildings")
+                            .transition()
+                            .style("opacity", 1);
+                })
+                .attr("transform", (d,i) => { return "translate(" + i * 70 + ",0)"; });
+
+
+            legenditem.append("rect")
+                .attr("x", width - 320)
+                .attr("y", 7)
+                .attr("width", 30)
+                .attr("height", 10)
+                .attr("class", "rect")
+                .style("fill", (d,i) => { return legendColors[i]; });
+
+            legenditem.append("text")
+                .attr("x", width - 300)
+                .attr("y", 5)
+                .style("text-anchor", "middle")
+                .attr("font-size",10)
+                .text( (d,i) => {return legendText[i]; })
+                .style("fill","white");
+        }
+
+        // currentMode
+
+        {
+            const modeList = ['AtHome','Transport','AtWork','AtRecreation','AtRestaurant'];
+            const colorList = ["#5E4FA2", "#3288BD", "#66C2A5","#FEE08B" , "#FF4500"];
+            let legend = svg.append("g")
+                .attr("id", "legendDist");
+
+            let legenditem = legend.selectAll(".legenditem")
+                .data(d3.range(5))
+                .enter()
+                .append("g")
+                .attr("class", "legenditem")
+                .attr("transform", (d,i) => { return "translate(" + i * 70 + ",10)"; });
+
+            legenditem.append("rect")
+                .attr("x", width - 20)
+                .attr("y", 10)
+                .attr("width", 30)
+                .attr("height", 10)
+                .attr("class", "rect")
+                .style("fill", (d,i) => { return colorList[i]; })
+
+            legenditem.append("text")
+                .attr("x", width )
+                .attr("y", 8)
+                .style("text-anchor", "middle")
+                .attr("font-size",10)
+                .text( (d,i) => {return modeList[i]; })
+                .style("fill","white");
+        }
+    }
+    drawLegend();
+
+    // 绘制circle的图例用于交互显示高亮化
+    function drawCircleLegend(){
+        let legendColors = ["#00FFFF", "#FF4500", "#006400"]
+        let legendText = ["Pub","Restaurant","School"]
+
+        let legend = map.append("g")
+			.attr("id", "circleLegend");
+
+		let legenditem = legend.selectAll(".legenditem")
+			.data(d3.range(3))
+			.enter()
+			.append("g")
+			.attr("class", "legenditem")
+			.attr("transform", (d,i) => { return "translate(0," + i * 30 + ")"; });
+
+		// 添加circle
+		legenditem.append("circle").attr("r",5)
+			.attr("cx", 320)
+			.attr("y", 7)
+			.style("fill", (d,i) => { return legendColors[i]; })
+            .on("click",(d,i)=>{
+                d3.selectAll("."+legendText[i])
+                .style("opacity",0)
+                } 
+            )
+            .on("dblclick",(d,i)=>{
+                d3.selectAll("."+legendText[i])
+                .transition()
+                .attr("r",5)
+                .style("opacity",0.8)
+            })
+            .on("mouseover",(d,i)=>{
+                d3.selectAll("."+legendText[i])
+                .transition()
+                .attr("r",7)
+                .style("opacity",1.0)
+            })
+
+		legenditem.append("text")
+			.attr("x", 280)
+			.attr("y", 5)
+			.style("text-anchor", "middle")
+            .attr("font-size",10)
+			.text( (d,i) => {return legendText[i]; })
+            .style("fill","white");
+    }
+    drawCircleLegend();
+
+
+    function drawBackground(){
+        // beautiful design (?)
+        const decorations = svg.append("g").attr("class", "decorations");
+        const line_color = "#A6C56A";
+        function draw_vertex(pos){
+            // draw a square at (x, y)
+            const x = pos[0], y = pos[1], r = 6;
+            decorations.append("path")
+                .style("stroke", "#677E54")
+                .style("fill", "#A2C359")
+                .attr("d", d3.line()([
+                    [x - r/2, y - r/2], [x + r/2, y - r/2], [x + r/2, y + r/2], [x - r/2, y + r/2],
+                    [x - r/2, y - r/2]
+                ]))
+        }
+        {
+            const left = margin.sidewidth, down = height;
+            decorations.append("path")
+            .style("stroke", line_color)
+            .style("fill", "none")
+            .attr("d", d3.line()([
+                // [left + width / 6, down - 5],
+                [left + width / 2, down - 88],
+                [left + width / 2, down - 120],
+                [left + width / 2 + 20, down - 140],
+                [left + width * 85 / 100, down - 140],
+                [left + width * 85 / 100, down - 240],
+                [left + width * 85 / 100 - 20, down - 260],
+                [left + width * 85 / 100 - 60, down - 260],
+                // [left + width * 85 / 100 - 80, down - 280],
+            ]));
+            draw_vertex([left + width / 2, down - 88]);
+            draw_vertex([left + width * 85 / 100 - 60, down - 260]);
+
+            
+            svg.append("g").append("text").attr("class", "participant_info")
+            .attr("transform", "translate(" + (left + width / 2 + 20) + "," + (down - 102) + ")")
+            .style("fill", "cyan")
+            .text("Participant Information");
+            
+            svg.append("g").append("text").attr("class", "participant_info").attr("id", "participant_info_id")
+            .attr("transform", "translate(" + (left + width / 2 + 40) + "," + (down - 66) + ")")
+            .style("fill", "#00CED1")
+            // .text("○ Id: ---");
+
+            
+            svg.append("g").append("text").attr("class", "participant_info").attr("id", "participant_info_datalength")
+            .attr("transform", "translate(" + (left + width / 2 + 40) + "," + (down - 30) + ")")
+            .style("fill", "#00CED1")
+        }
+
+        {
+            const up = margin.leftside_svg.parallel_top, left = margin.sidewidth, right = width + margin.sidewidth;
+            decorations.append("path")
+                .style("stroke", line_color)
+                .style("fill", "none")
+                .attr("d", d3.line()([
+                    [left + 30, up + 145],
+                    [left + 30, up + 45],
+                    [left + 50, up + 25],
+                    [left + 140, up + 25],
+                    [left + 195, up - 40],
+                    // [left + 160, up - 25],
+                    [left + 235, up - 40]
+                ]));
+            
+            draw_vertex([left + 30, up + 145]);
+            draw_vertex([left + 235, up - 40]);
+
+            decorations.append("path")
+                .style("stroke", line_color)
+                .style("fill", "none")
+                .attr("d", d3.line()([
+                    [right - 400, up - 35],
+                    [right - 220, up - 35],
+                    // [right - 220, up - 5],
+                    [right - 200, up - 35 + 20],
+                    [right - 200, up - 35 + 20 + 40],
+                    // [right - 230, up + 5],
+                    // [right - 230, up + 25],
+                ]));
+            
+            draw_vertex([right - 400, up - 35]);
+            draw_vertex([right - 200, up - 35 + 20 + 40]);
+        }
+
+        {
+            const left = margin.sidewidth, down = height;
+            
+            decorations.append("path")
+                .style("stroke", line_color)
+                .style("fill", "none")
+                .attr("d", d3.line()([
+                    [left + 30, down - 55],
+                    [left + 30, down - 25],
+                    [left + 50, down - 5],
+                    [left + 140, down - 5],
+                ]));
+            
+            draw_vertex([left + 30, down - 55]);
+            draw_vertex([left + 140, down - 5]);
+        }
+
+    }
+    drawBackground();
+
+    function drawSide(){
+        // left side
+        {
+            // the object type must be "foreignObject" (?)
+            const sidewidth = margin.sidewidth;
+            let side = svg.append("foreignObject").attr("x", 0).attr("y", 0)
+            .attr("id", "leftside")
+            .attr("height", height).attr("width", sidewidth).append("xhtml:body");
+
+            side.append("input").attr("class", "input").attr("id", "input_participandId").attr("placeholder", "请输入用户Id")
+            .attr("style", "width:" + Math.round(sidewidth * 3 / 5) + "px")
+            ;
+
+            side.append("button").attr("id", "query_button")
+            .attr("onclick", "loadActivityLogs()")
+            .attr("onmouseover", "this.style.setProperty('background', '#4D93EB');this.style.setProperty('color', '#F0F8FF')")
+            .attr("onmouseout", "this.style.setProperty('background', 'royalblue');this.style.setProperty('color', 'black')")
+            .attr("style", "width:" + (Math.round(sidewidth / 3) - 20) + "px; margin-left: 5px;").html("查询")
+            .style("background","royalblue");
+
+
+            side.append("button").attr("class", "drawback").attr("onclick", "drawbackTrack()")
+            .attr("onmouseover", "this.style.setProperty('background', '#4D93EB');this.style.setProperty('color', '#F0F8FF')")
+            .attr("onmouseout", "this.style.setProperty('background', 'cornflowerblue');this.style.setProperty('color', 'black')")
+            .attr("style", "margin-top: 10px").html("删除用户轨迹")
+            .style("background","cornflowerblue");
+
+            let leftsvg = d3.select("#leftside").append("svg").attr("width", sidewidth)
+            .attr("height", height - margin.leftside_svg.top).attr("id", "leftside_svg")
+            // .attr("transform", margin.top + margin.leftside_svg.top);
+
+            // parallel coordinates
+            {
+                const gradient = leftsvg.append("defs").append("linearGradient")
+                .attr("id", "parallel_gradient")
+                .attr("x1", "0%").attr("x2", "100%").attr("y1", "0%").attr("y2", "100%");
+
+                gradient.append("stop").attr("class", "start").attr("offset", "0%")
+                .attr("stop-color", "blue")
+                .attr("stop-opacity", 1);
+
+                gradient.append("stop").attr("class", "end").attr("offset", "100%")
+                .attr("stop-color", "lightcyan")
+                .attr("stop-opacity", 1);
+
+                const ydomains = {
+                    age: [10, 60],
+                    educationLevel: [1,2,3,4], // four types
+                    dailyFoodBudget: [12, 16, 20], // only three types
+                    householdSize: [1, 2, 3], // only three types
+                    joviality: [0,1]
+                };
+                
+                const x = d3.scalePoint()
+                        .range([margin.leftside_svg.parallel_top, height - margin.leftside_svg.top - margin.bottom - 20])
+                        // .padding(1)
+                        .domain(Object.keys(ydomains));
+                
+                let ytransforms = {};
+                for (let key in ydomains){
+                    if (ydomains[key].length == 2){ // continuous variable
+                        ytransforms[key] = d3.scaleLinear()
+                                                .domain(ydomains[key])
+                                                .rangeRound([0, sidewidth - margin.leftside_svg.right]);
+                    }else{ // discrete (categorical) variable
+                        ytransforms[key] = d3.scalePoint()
+                                                .domain(ydomains[key])
+                                                .rangeRound([0, sidewidth - margin.leftside_svg.right]);
+                    }
+                    
+                    leftsvg.append("g").attr("class", "parallel_axes")
+                        .call(d3.axisBottom(ytransforms[key]).ticks(4))
+                        .data([key])
+                        .attr("id", "parallel_axes_" + key)
+                        .attr("transform", "translate(" + margin.leftside_svg.left + ", " + x(key) + ")")
+                        .style("opacity", .8)
+                        .style("fill", "url(#parallel_gradient)")
+                        .style("stroke-width", 2)
+                        .on("mouseover", (key) => {
+                            d3.select("#parallel_axes_" + key).transition()
+                                .style("opacity", 1)                        
+                                .style("stroke-width", 3);
+                                
+                            d3.select("#parallel_axes_text_" + key).transition()
+                                .style("opacity", 1);
+
+                        })
+                        .on("mouseleave", (key) => {
+                            d3.select("#parallel_axes_" + key).transition()
+                                .style("opacity", .8)                      
+                                .style("stroke-width", 2);
+                                
+                            d3.select("#parallel_axes_text_" + key).transition()
+                                .style("opacity", .8);
+                                
+                        })                        
+                        // .selectAll("text")
+                        // .style("opacity", .8)
+                        // .style("fill", "white")
+                        .append("text")
+                            .style("text-anchor", "start")
+                            .attr("id", "parallel_axes_text_" + key)
+                            .attr("y", -5)
+                            .text(key)
+                            .style("fill", "white")
+                            .style("opacity", .8);
+                }
+                
+                alldata.parallel_axes = {
+                    'ydomains': ydomains,
+                    'x': x,
+                    'ytransforms': ytransforms
+                }
+                
+            }
+        }
+
+        // right side
+        {
+            const sidewidth = margin.sidewidth_right;
+            let side = svg.append("foreignObject").attr("x", width).attr("y", 0)
+            .attr("id", "rightside")
+            .attr("height", height).attr("width", sidewidth).append("xhtml:body");
+            
+            side.append("svg").attr("width", sidewidth).attr("height", height).attr("id", "rightside_svg")
+
+            let rightsvg = d3.select("#rightside_svg");
+
+
+            // circular plot
+            {
+                const gradient = rightsvg.append("defs").append("linearGradient")
+                .attr("id", "circular_gradient")
+                .attr("x1", "0%").attr("x2", "100%").attr("y1", "0%").attr("y2", "100%");
+
+                gradient.append("stop").attr("class", "start").attr("offset", "0%")
+                .attr("stop-color", "red")
+                .attr("stop-opacity", 1);
+
+                gradient.append("stop").attr("class", "end").attr("offset", "100%")
+                .attr("stop-color", "blue")
+                .attr("stop-opacity", 1);
+
+                rightsvg.append("g").attr("class", "circular_base").selectAll("path")
+                    .data([0]).enter()
+                    .append("path")
+                    .attr("fill", "url(#circular_gradient)")
+                    .attr("transform", "translate(" + Math.round((sidewidth - 50)/2) + ",140)")
+                    .attr("d", d3.arc()
+                        .innerRadius((d) => { return margin.circular.innerRadius - 20; })
+                        .outerRadius((d) => { return margin.circular.innerRadius - 15; })
+                        .startAngle((d) => { return 0; })
+                        .endAngle((d) => { return 2 * Math.PI; })
+                        .padAngle(0.01)
+                        .padRadius(margin.circular.innerRadius)
+                    )
+                    
+                rightsvg.append("text").attr("class", "circular_time")
+                    .attr("fill", "white")
+                    .attr("font-size", 25)
+                    .attr("transform", "translate(" + Math.round((sidewidth - 115)/2) + ",145)")
+                    .text("00:00")
+            }
+            
+            // financial plot
+            {
+                const timex = d3.scaleTime()
+                    .rangeRound([0, margin.financial_plot.width])
+                    .domain(d3.extent(['2022-03-01T00:00:00Z', '2022-07-04T09:55:00Z'], (d) => new Date(d)));
+                
+                    
+                const gradient = rightsvg.append("defs").append("linearGradient")
+                .attr("id", "financial_gradient")
+                .attr("x1", "0%").attr("x2", "100%").attr("y1", "0%").attr("y2", "100%");
+
+                gradient.append("stop").attr("class", "start").attr("offset", "0%")
+                .attr("stop-color", "cornflowerblue")
+                .attr("stop-opacity", 1);
+
+                gradient.append("stop").attr("class", "end").attr("offset", "100%")
+                .attr("stop-color", "lightcyan")
+                .attr("stop-opacity", 1);
+
+                const axis = rightsvg.append("g")
+                    .attr("transform", "translate(0," + (height - margin.bottom - 10) + ")")
+                    .call(d3.axisBottom(timex).ticks(5))  
+                    .style("opacity", .8)       
+                    // .style("fill","url(#financial_gradient)");
+
+                    axis.selectAll("path")
+                    .style("stroke", "url(#financial_gradient)");
+
+                    axis.selectAll("text")
+                    .attr("transform", "translate(-10,0)rotate(-45)")
+                    .style("fill","white")
+                    .style("opacity", .8)
+                    .style("text-anchor", "end");
+                    
+
+                const header = ["Weekly Extra Budget"];
+                const headers = rightsvg.append("g");
+                headers.selectAll("text").data(header).enter().append("text")
+                    .attr("stroke","#00BFFF")
+                    .attr("transform","translate(100,"+(height - margin.bottom -200) + ")")
+                    .style("font-size","15px")
+                    .text(d=>d);
+            }
+        }
+    }
+    drawSide();
+
+    function drawtimeline(){
+        const timelineMargin = {top: height - 60, right: 50, bottom: 10, left: 40};
+
+        let flow = new Array(40);
+        const parseTime = (d) => (new Date(d));
+        for (let i = 0; i < 40; ++i){
+            flow[i] = {'time': '2022-06-04T09:'+(i+10)+':00Z', 'value': i};
+        }
+
+        // transform (time, value) coordinate to image coordinate using d3.scaleTime(), d3.scaleLinear()
+        let x = d3.scaleTime().rangeRound([0, width - timelineMargin.right - timelineMargin.left]);
+        let y = d3.scaleLinear().rangeRound([0, height - timelineMargin.bottom - timelineMargin.top - 5]);
+        
+        // automatically set the domain of input by reading the data
+        x.domain(d3.extent(['2022-03-01T00:00:00Z', '2022-07-04T09:55:00Z'], (d) => parseTime(d)));
+        y.domain(d3.extent(flow, (d) => d.value));
+        
+        // brush
+        function brushed(){
+            if (d3.event.sourceEvent && d3.event.sourceEvent.type === "zoom") return; // ignore brush-by-zoom
+            let s = d3.event.selection; // s = [left, right] where left and right are float64
+            // console.log(x.invert(s[0]), x.invert(s[1]));
+            
+            // convert float to date
+        }
+        
+        const brush = d3.brushX()
+        .extent([
+            [0, -10],
+            [width - timelineMargin.right - timelineMargin.left, height - timelineMargin.bottom - timelineMargin.top],
+        ])
+        .on("brush end", brushed);
+
+
+        let timeline = svg.append("g").attr("class", "timeline")
+        .attr("height", height - timelineMargin.bottom - timelineMargin.top)
+        .attr("transform", "translate(" + timelineMargin.left + "," + (timelineMargin.top + 50) + ")");;
+        
+        timeline.append("g").attr("class", "brush").call(brush);
+
+        timeline.append("g").call(d3.axisBottom(x)).attr("transform", "translate(0, 30)")
+    
+    }
+    //drawtimeline();
+
+    function loadActivityLogs(){
+        const Id = document.getElementById("input_participandId").value;
+
+        if (typeof(alldata.colorsTrack[Id]) !== 'undefined'){
+            // has drawn, quit
+            return;
+        }
+        //["#5E4FA2", "#3288BD", "#66C2A5", "#ABDDA4", "#E6F598", "#FFFFBF", "#FEE08B", "#FDAE61", "#F46D43", "#D53E4F", "#9E0142"]
+
+        const modeList = ['AtHome','Transport','AtWork','AtRecreation','AtRestaurant'];
+        const modeIndex = [{mode:'AtHome'},{mode:'Transport'},{mode:'AtWork'},{mode:'AtRecreation'},{mode:'AtRestaurant'}]
+        const colorList = ["#5E4FA2", "#3288BD", "#66C2A5","#FEE08B" , "#FF4500"]
+        //colorList = ["#5E4FA2", "#3288BD", "#66C2A5", "#ABDDA4", "#E6F598"]
+        const colorsMode = d3.scaleOrdinal()
+        .domain(modeList)
+        .range(colorList)
+
+
+        let group = Math.floor(Id/5)+1  
+        function drawActivityLog(Id){  
+
+            const color = colorsTrack(Id)            
+            const _data = alldata.ActivityLogs[Id];
+            function mouseOver(Id){
+                d3.selectAll("#track" + Id)
+                    .style("opacity",1.0)
+                    .style("stroke-width",3.0)
+
+                d3.selectAll(".parallel_lines")
+                        .transition()
+                        .style("stroke", "lightgray")
+                        .style("opacity", .5);
+
+                d3.select("#parallels_" + Id)
+                    .transition().duration(200)
+                    .style("opacity", 1)
+                    .style("stroke", colorsTrack(Id))
+                    .style("stroke-width", 4);
+
+                d3.selectAll(".circular_rings")
+                    .transition()
+                    .style("opacity", .5);
+
+                d3.selectAll("#Id" + Id)
+                    .transition()
+                    .style("opacity",1.0)
+
+                d3.selectAll("#budget" + Id)
+                    .style("opacity",1.0)
+                    .style("stroke-width",3.0)
+                
+                d3.select("#participant_info_id")
+                    .style("opacity", 0)
+                    .transition().duration(200)
+                    .text("○ Id: " + Id)
+                    .style("opacity", 1);
+                
+                d3.select("#participant_info_datalength")
+                    .style("opacity", 0)
+                    .transition().duration(200)
+                    .text("○ Data Length: " + alldata.ActivityLogs[Id].length)
+                    .style("opacity", 1);
+            }
+
+            function mouseLeave(Id){
+                d3.selectAll("#track" + Id)
+                    .style("opacity",0.8)
+                    .style("stroke-width",2.0)
+
+                d3.selectAll(".parallel_lines").transition()
+                        .style("stroke", (d) => {return colorsTrack(d);})
+                        .style("opacity", .85);
+
+                d3.select("#parallels_" + Id)
+                    .transition()
+                    .style("stroke-width", 2);
+
+                    
+                d3.selectAll(".circular_rings")
+                    .transition()
+                    .style("opacity", .8);
+
+                // d3.selectAll("#Id"+Id)
+                //     .transition()
+                //     .style("opacity", 0.8)
+
+                d3.selectAll("#budget" + Id)
+                    .style("opacity", 0.8)
+                    .style("stroke-width", 1.5);
+                
+                d3.select("#participant_info_id")
+                    .text("");
+                
+                d3.select("#participant_info_datalength")
+                    .text("");
+            }
+
+            // draw the track
+            {
+                let coors = [];
+                let lines = [];
+                let previous_time = 0;
+                for (let i = 0, n = _data.length; i < n; ++i){
+                    // sometimes the timestamp is incontinuous, we need to skip that
+                    if (previous_time === 0 || _data[i].timestamp - previous_time > 700000){
+                        if (coors.length > 1) lines.push((coors));
+                        coors = [];
+                    }
+                    previous_time = _data[i].timestamp;
+
+                    coors.push(fcoor(_data[i].currentLocation[0], _data[i].currentLocation[1]));
+                    // delete _data[i];
+                }
+                if (coors.length > 1) lines.push(coors);
+
+                let tracks = map.append("g").attr("class", "tracks").selectAll("tracks")
+                .data(lines).enter()
+                .append("path").attr("id","track"+Id)
+                .attr("fill", "none")
+                .attr("stroke", color)
+                .attr("stroke-width", 2.0)
+                .attr("opacity", 0.8)
+                .attr("d", (d) => {
+                    return d3.line()(d);
+                })
+                .on("mouseover",(d)=>{mouseOver(Id)})
+                .on("mouseleave",(d)=>{mouseLeave(Id)})
+                .append('title')
+                .text((d)=>{
+                    return "participantId:"+Id
+                })
+            }
+            
+
+            // parallel coordinates
+            {
+                const ydomains = alldata.parallel_axes.ydomains;
+                const x = alldata.parallel_axes.x;
+                const ytransforms = alldata.parallel_axes.ytransforms;
+                const _data = alldata.Participants[Id];
+
+
+                const coors = Object.keys(ydomains).map((d) => {
+                    // sometimes the lines coincide and are hard to observe
+                    // we add a small random perturbation to avoid that
+                    const bias = ydomains[d].length == 2? 0: (Math.random() - .5) * 10;
+                    return [margin.leftside_svg.left + ytransforms[d](_data[d]) + bias, x(d) + 2];
+                })
+                d3.select("#leftside_svg").append("g").attr("class", "parallels").selectAll("path")
+                .data([Id]).enter()
+                .append("path")
+                .attr("class", "parallel_lines")
+                .attr("id", "parallels_" + Id)
+                .style("fill", "none")
+                .style("stroke", colorsTrack(Id))
+                .style("stroke-width", 2)
+                .style("opacity", .85)
+                .on("mouseover", (d)=>{mouseOver(Id)})
+                .on("mouseleave", (d)=>{mouseLeave(Id)})
+                .attr("d", d3.line()(coors))
+                .append("title")
+                .text("participantId:"+Id);
+                
+            }
+
+            //circular plot 
+            {           
+            const sidewidth = margin.sidewidth_right;
+            const innerRadius = margin.circular.innerRadius, outerRadius = margin.circular.outerRadius;
+            const _data = alldata.ActivityLogs[Id];
+            //console.log(_data)
+
+            let avg_dist_home = new Array(24 * 12); // 24 hours, each hour 12 timestamps
+            let avg_dist_home_count = new Array(24 * 12);
+            avg_dist_home.fill(0);
+            avg_dist_home_count.fill(0);
+            let mode_count = new Array(24*12);
+            for (let i = 0;i < 288;++i){
+                mode_count[i] = new Array(5)
+                mode_count[i].fill(0)
+            }
+
+            for (let i = 0, n = _data.length; i < n; ++i){
+                //console.log(_data[i].timestamp.getHours())
+                const t = _data[i].timestamp.getUTCHours() * 12 + Math.round(_data[i].timestamp.getUTCMinutes() / 5);
+                //console.log(t)
+                avg_dist_home[t] += _data[i].dist2home;
+
+                ++avg_dist_home_count[t];
+                const currentMode = _data[i].currentMode;
+                const index = modeIndex.findIndex((value)=>value.mode==currentMode)
+                //console.log(index)
+                ++mode_count[t][index]
+            }
+            //console.log(mode_count)
+            for (let i = 0; i < 288; ++i){
+                let max_count = 0
+                var max_index = 0
+                for (let j = 0;j<5 ;++j){
+                    if (mode_count[i][j]>max_count){
+                        max_index = j
+                        max_count = mode_count[i][j]
+                    }
+                }
+                avg_dist_home[i] = [i, avg_dist_home[i] / avg_dist_home_count[i],modeIndex[max_index].mode,Id];
+            }
+            const x = d3.scaleBand()
+                .range([0*Math.PI, 2 * Math.PI])
+                .align(0)                 
+                .domain(avg_dist_home.map((d) => {return d[0];})); // The domain of the X axis is the list of 24 * 12 timestamps each day
+                
+            // Y scale
+            const y = d3.scaleRadial()
+                .range([innerRadius, outerRadius])   // Domain will be define later.
+                .domain([0, 6000]); // Domain of Y is from 0 to the max seen in the data
+                // it seems that sqrt(max(x)-min(x))^2+(max(y)-min(y))^2) has distance 10670, but it is rarely seen
+
+            // Add bars
+            d3.select("#rightside_svg").append("g").attr("class", "circulars").selectAll("path")
+                .data(avg_dist_home).enter()
+                .append("path")
+                .attr("id","Id" + Id)
+                .attr("class", "circular_rings")
+                .attr("fill", (d)=>{return colorsMode(d[2])})
+                .style("opacity", 0.8)
+                .attr("transform", "translate(" + Math.round((sidewidth - 50)/2) + ",140)")
+                .attr("d", d3.arc()
+                    .innerRadius((d) => { return y(Math.min(6000, d[1])) - 10; })
+                    .outerRadius((d) => { return y(Math.min(6000, d[1])); })
+                    .startAngle((d) => { return x(d[0]); })
+                    .endAngle((d) => { return x(d[0]) + x.bandwidth(); })
+                    .padAngle(0.01)
+                    .padRadius(innerRadius)
+                )
+                .on("click",(d)=>{
+                    d3.selectAll("#Id"+d[3])
+                    .style("opacity", 1.0)
+                    .attr("d",d3.arc()
+                    .innerRadius((d) => { return y(Math.min(6000, d[1])) - 5; })
+                    .outerRadius((d) => { return y(Math.min(6000, d[1])); })
+                    .startAngle((d) => { return x(d[0]); })
+                    .endAngle((d) => { return x(d[0]) + x.bandwidth(); })
+                    .padAngle(0.01)
+                    .padRadius(innerRadius)
+                    )
+                }) 
+                .on("dblclick",(d)=>{
+                    d3.selectAll("#Id"+d[3])
+                    .style("opacity", 0.8)
+                    .attr("d",d3.arc()
+                    .innerRadius((d) => { return y(Math.min(6000, d[1])) - 10; })
+                    .outerRadius((d) => { return y(Math.min(6000, d[1])); })
+                    .startAngle((d) => { return x(d[0]); })
+                    .endAngle((d) => { return x(d[0]) + x.bandwidth(); })
+                    .padAngle(0.01)
+                    .padRadius(innerRadius)
+                    )
+                })
+                .on("mouseover",(d) => {
+                    if (alldata.circulars.delay === d[3]) alldata.circulars.delay = -1; //&& alldata.circulars.delay !== d[3]){}
+                    const hour = Math.floor(d[0] / 12).toString();
+                    const min = ((d[0] - hour * 12) * 5).toString();
+                    const txt = (hour.length === 1? "0": "") + hour + ":" + (min.length === 1? "0": "") + min;
+                    d3.select(".circular_time")
+                        .transition()
+                        .text(txt);
+                    mouseOver(d[3]);
+                })
+                .on("mouseleave",(d)=>{
+                    alldata.circulars.delay = d[3];
+                    setTimeout(() => {if (alldata.circulars.delay === d[3]) mouseLeave(d[3]);}, 200);
+                })
+                .append('title')
+                .text(function (d){
+                    const hour = Math.floor(d[0]/12);
+                    const min = (d[0]-hour*12)*5;
+                    return "participantId:"+d[3]+"\n"+"currentMode:"+d[2]+"\n"+"time:"+hour+":"+min
+                })
+            }
+
+            // financial plot
+            {
+            const timex = d3.scaleTime()
+                .rangeRound([0, margin.financial_plot.width])
+                .domain(d3.extent(['2022-03-01T00:00:00Z', '2022-07-04T09:55:00Z'], (d) => new Date(d)));
+            
+            const y = d3.scaleLinear()
+                .rangeRound([-1, 180])
+                .domain([-15, 32900]) // minimum of weeklyExtraBudget = -14.49.., maximum = 32878.89...
+            // const sidewidth = margin.sidewidth_right;
+            const _data = alldata.ActivityLogs[Id];
+
+            const weekly_extra_budget = _data.map((d) => {return [timex(d.timestamp), y(d.weeklyExtraBudget)];});
+            //console.log(weekly_extra_budget);
+            
+            d3.select("#rightside_svg").append("g").attr("class", "weeklyExtraBudgetPlot")//.selectAll("path")
+                .datum(_data) 
+                .append("path")
+                .attr("id","budget"+Id)
+                .attr("transform", "translate(0," + (height - margin.bottom - 10) + ")")
+                .attr("fill", "none")
+                .attr("stroke", color)
+                .attr("stroke-width", 1.5)
+                .attr("d", d3.line()
+                            .x((d) => {return timex(d.timestamp);})
+                            .y((d) => {return - y(d.weeklyExtraBudget);})
+                )
+                .style("opacity", 0.8)
+                .on("mouseover",(d)=>{mouseOver(Id)})
+                .on("mouseleave",(d)=>{mouseLeave(Id)})
+                .append('title')
+                .text("participantId:"+Id)
+                
+            }
+        
+        
+        }
+        // only read the data at the first time
+        if (alldata.ActivityLogs[Id].length == 0){
+                const file_number = Math.floor(Id / 5) + 1;
+                let food = 0;
+                d3.csv("Datasets\\Activity Logs\\ParticipantLogs" + file_number + ".csv", (data) => {
+                    const dist = (x1, y1, x2, y2) => {return Math.sqrt(Math.pow(x1 - x2, 2) + Math.pow(y1 - y2, 2));};
+                    let lasthome = [0,0]; // sometimes the apartmentId is not revealed, we use the last record of atHome
+                    for (let i = 0, n = data.length; i < n; ++i){
+                        // write to the information of the participant
+                        const d = data[i];
+                        if(d['participantId'] == Id){
+                            const loc0 = d['currentLocation'].slice(7, d['currentLocation'].length - 1).split(' ');
+                            const loc = [parseFloat(loc0[0]), parseFloat(loc0[1])];
+                            const apartmentId = Math.round(d['apartmentId']);
+                            if (d['apartmentId'].length > 0){
+                                lasthome = alldata.Apartments[apartmentId].location;
+                            }else if (d['currentMode'] == 'atHome'){
+                                lasthome = apartmentId;
+                            }
+                            // actually the daily food budget remains unchanged throughout the time
+                            food = d['dailyFoodBudget'];
+                            const dist2home = dist(lasthome[0], lasthome[1], loc[0], loc[1]);
+                            alldata.ActivityLogs[Id].push({
+                                'timestamp': new Date(d['timestamp']),
+                                'currentLocation': loc,
+                                'currentMode': d['currentMode'],
+                                'apartmentId': apartmentId,
+                                'dist2home': dist2home,
+                                'weeklyExtraBudget': parseFloat(d['weeklyExtraBudget'])
+                            })
+                        }
+                    }
+                    alldata.Participants[Id].dailyFoodBudget = parseInt(food);
+                    // draw after reading the data
+                    drawActivityLog(Id);
+                })
+            }else{
+                drawActivityLog(Id);
+            }
+    }
+    
+    //loadActivityLogs()
+    function loadParticipants(){
+        d3.csv("Datasets\\Attributes\\Participants.csv", (data) => {
+            const edu2int = {'Low': 1, 'HighSchoolOrCollege': 2, 'Bachelors': 3, 'Graduate': 4};
+            for (let i = 0, n = data.length; i < n; ++i){        
+                const d = data[i];    
+                alldata.Participants[i] = {
+                    'age': parseInt(d['age']),
+                    'educationLevel': edu2int[d['educationLevel']],
+                    'dailyFoodBudget': 12., // default
+                    'householdSize': parseInt(d['householdSize']),
+                    'joviality': parseFloat(d['joviality'])
+                };
+            }
+        })
+    }
+    loadParticipants();
+    
+    function drawbackTrack(){
+        d3.selectAll('.tracks').remove();
+        d3.selectAll('.circulars').remove();
+        d3.selectAll('.weeklyExtraBudgetPlot').remove();
+        d3.selectAll('.parallels').remove();
+        alldata.colorsTrack = {};
+        
+        d3.select(".circular_time")
+            .text("00:00");
+    }
+   
+</script>only read the data at the first time
+        if (alldata.ActivityLogs[Id].length == 0){
+                const file_number = Math.floor(Id / 5) + 1;
+                let food = 0;
+                d3.csv("Datasets\\Activity Logs\\ParticipantLogs" + file_number + ".csv", (data) => {
+                    const dist = (x1, y1, x2, y2) => {return Math.sqrt(Math.pow(x1 - x2, 2) + Math.pow(y1 - y2, 2));};
+                    let lasthome = [0,0]; // sometimes the apartmentId is not revealed, we use the last record of atHome
+                    for (let i = 0, n = data.length; i < n; ++i){
+                        // write to the information of the participant
+                        const d = data[i];
+                        if(d['participantId'] == Id){
+                            const loc0 = d['currentLocation'].slice(7, d['currentLocation'].length - 1).split(' ');
+                            const loc = [parseFloat(loc0[0]), parseFloat(loc0[1])];
+                            const apartmentId = Math.round(d['apartmentId']);
+                            if (d['apartmentId'].length > 0){
+                                lasthome = alldata.Apartments[apartmentId].location;
+                            }else if (d['currentMode'] == 'atHome'){
+                                lasthome = apartmentId;
+                            }
+                            // actually the daily food budget remains unchanged throughout the time
+                            food = d['dailyFoodBudget'];
+                            const dist2home = dist(lasthome[0], lasthome[1], loc[0], loc[1]);
+                            alldata.ActivityLogs[Id].push({
+                                'timestamp': new Date(d['timestamp']),
+                                'currentLocation': loc,
+                                'currentMode': d['currentMode'],
+                                'apartmentId': apartmentId,
+                                'dist2home': dist2home,
+                                'weeklyExtraBudget': parseFloat(d['weeklyExtraBudget'])
+                            })
+                        }
+                    }
+                    alldata.Participants[Id].dailyFoodBudget = parseInt(food);
+                    // draw after reading the data
+                    drawActivityLog(Id);
+                })
+            }else{
+                drawActivityLog(Id);
+            }
+    }
+    
+    //loadActivityLogs()
+    function loadParticipants(){
+        d3.csv("Datasets\\Attributes\\Participants.csv", (data) => {
+            const edu2int = {'Low': 1, 'HighSchoolOrCollege': 2, 'Graduate': 3, 'Bachelors': 4};
+            for (let i = 0, n = data.length; i < n; ++i){        
+                const d = data[i];    
+                alldata.Participants[i] = {
+                    'age': parseInt(d['age']),
+                    'educationLevel': edu2int[d['educationLevel']],
+                    'dailyFoodBudget': 12., // default
+                    'householdSize': parseInt(d['householdSize']),
+                    'joviality': parseFloat(d['joviality'])
+                };
+            }
+        })
+    }
+    loadParticipants();
+    
+    function drawbackTrack(){
+        d3.selectAll('.tracks').remove();
+        d3.selectAll('.circulars').remove();
+        d3.selectAll('.weeklyExtraBudgetPlot').remove();
+        d3.selectAll('.parallels').remove();
+    }
+
+    function drawTrack01(){
+        let data01 = {'TestLogs': new Array(2)};
+        let color01 = ["#5E4FA2", "#66C2A5"];
+
+        for (let i = 0; i < 2; ++i) data01.TestLogs[i] = {};
+        d3.csv("Datasets\\Activity Logs\\TestLogs1.csv", (data) =>{
+            for (let i = 0, n = data.length; i < n; ++i){
+                const ID = data[i]['participantId'];
+                if (ID > 1){
+                    continue;
+                }
+                const loc = data[i]['currentLocation'].slice(7, data[i]['currentLocation'].length - 1).split(' ');
+                // write to the information of the participant
+                data01.TestLogs[data[i]['participantId']][data[i]['timestamp']] = {
+                    'currentLocation': [parseFloat(loc[0]), parseFloat(loc[1])],
+                    'Id':ID
+                } 
+            }
+            let tracks01 = map.append("g").attr("class", "tracks").selectAll("tracks")
+                .data(data01.TestLogs).enter()
+                .append("path")
+                .attr('id',(d,i) => {return 'num'+i})
+                .attr("fill", "none")
+                .attr("stroke", (d,i) => {return color01[i];})
+                .attr("stroke-width", 2.0)
+                .attr("opacity", 0.5)
+                .attr("d", (d) => {
+                    let coors = [];
+                    for (let i in d){
+                        coors.push(fcoor(d[i].currentLocation[0], d[i].currentLocation[1]));
+                    }
+                    return d3.line()(coors);
+                })
+                .on("click",(d,i)=>{
+                        d3.selectAll("#num"+i)
+                        .attr("stroke-width",5.0)
+                        .style("opacity",0.8)                    
+                })
+                .on("dblclick",(d,i)=>{
+                        d3.selectAll("#num"+i)
+                        .attr("stroke-width",2.0)
+                        .style("opacity",0.5)
+                })
+            
+                
+    })
+}   
+</script>
